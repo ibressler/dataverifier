@@ -1,4 +1,5 @@
 #!/usr/bin/python2.7
+# -*- coding: utf-8 -*-
 
 import locale
 import sys
@@ -12,6 +13,7 @@ import pickle
 
 # enable utf8 encoding when piped
 sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout);
+#sys.setdefaultencoding('utf8')
 
 class MyError(Exception):
     def __init__(s, msg=""):
@@ -22,6 +24,34 @@ class MyError(Exception):
 
 class Usage(MyError): pass
 
+class ChecksumDB():
+    dirname = None
+    watchlist = None
+
+    def __init__(s, path):
+        s.dirname = path
+        s.watchlist = dict()
+
+    def empty(s):
+        return len(s.watchlist) <= 0
+
+    def __str__(s):
+        return "{0} ({1})".format(s.dirname, len(s.watchlist))
+
+def debugPrint(arg):
+    s = str(arg[:])
+    print s.decode('ascii', 'replace')    
+
+def verify(args):
+    print "verify"
+    if not hasattr(args, 'infile'):
+#       not hasattr(args, 'outfile') or \
+#       not hasattr(args, 'pattern'):
+        return
+
+    db = pickle.load(args.infile)
+    print "Loaded checksums for {0}.".format(db)
+
 def getChecksums(fname):
     if fname is None or not os.path.exists(fname):
         return
@@ -30,7 +60,7 @@ def getChecksums(fname):
     with codecs.open(fname, encoding='utf8') as fd:
         for line in fd:
             try:
-                if len(line) < 2 or line.startswith('#'):
+                if len(line) < 2 or line.startswith(u'#'):
                     continue
                 fields = line.split()
                 if len(fields) < 2:
@@ -38,7 +68,7 @@ def getChecksums(fname):
                 checksum = fields[0].strip()
                 if len(checksum) < 2:
                     continue
-                filename = line[len(checksum):].strip().lstrip('*')
+                filename = line[len(checksum):].strip().lstrip(u'*')
                 filename = os.path.join(dname, filename)
             except Exception, e:
                 print e
@@ -47,6 +77,20 @@ def getChecksums(fname):
             else:
                 lst.append((filename, checksum))
     return lst
+
+def updateWatchlist(watchlist, newList):
+    for filename, checksum in newList:
+        if watchlist.has_key(filename):
+            oldChecksum = watchlist[filename]
+            # prefer longer (sha) checksums and ignore duplicates
+            if len(oldChecksum) > len(checksum):
+                continue
+            elif len(oldChecksum) == len(checksum) and \
+                    oldChecksum != checksum:
+                print filename, watchlist[filename], checksum
+                continue
+
+        watchlist[filename] = checksum
 
 def create(args):
     if not hasattr(args, 'directory') or \
@@ -63,21 +107,23 @@ def create(args):
     if len(answer) > 1:
         return 1
 
-    watchlist = dict()
+    db = ChecksumDB(directory)
     generator = os.walk(directory, followlinks=True)
     for (dirpath, dirnames, filenames) in generator:
         # add all files within the current directory
         for fname in filenames:
             match = re.search(pattern, fname)
             if match is not None:
-                fullname = os.path.join(dirpath,fname)
+                # why does it work with decode?
+                fullname = os.path.join(dirpath,fname).decode('utf8')
                 print fullname
                 lst = getChecksums(fullname)
-                watchlist.update(lst)
+                updateWatchlist(db.watchlist, lst)
 
-    if len(watchlist) <= 0:
+    if db.empty():
         raise MyError("Checksum list is empty, nothing to save.")
-    pickle.dump(watchlist, outfile)
+    pickle.dump(db, outfile)
+    print "Saved {0} entries.".format(len(db.watchlist))
 
     return
 
@@ -100,7 +146,6 @@ def main():
     parser_create.description = "Create database from checksum files "+\
                                 "by recursive directory search."
     parser_create.set_defaults(func=create)
-
     parser_create.add_argument('-d', '--dir', dest='directory', 
                                default=os.getcwdu(),
                                metavar='DIR',
@@ -114,6 +159,16 @@ def main():
                                type=argparse.FileType('w'),
                                metavar='OUTFILE',
                                help='output filename for checksum database')
+
+    parser_verify = subparsers.add_parser("verify")
+    parser_verify.description = "Verify a directory structure based on an "+\
+            "existing checksum database and sync with changes"
+    parser_verify.set_defaults(func=verify)
+    parser_verify.add_argument('-i', '--infile', dest='infile',
+                               default=u"checksum.db",
+                               type=argparse.FileType('rw'),
+                               metavar='INFILE',
+                               help='filename for checksum database to update')
 
     if len(sys.argv) <= 1:
         parser.print_help()
