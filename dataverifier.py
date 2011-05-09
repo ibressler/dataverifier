@@ -273,6 +273,7 @@ def verify(args):
     db = ChecksumDB.load(args.filename)
     print "Loaded checksums for {0}.".format(db)
     db.check()
+    db.store(args.filename) # replace with updated db
 
 # parses existing checksum files and generates a database from them
 # TODO: process checksum files in parallel
