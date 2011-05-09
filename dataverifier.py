@@ -298,40 +298,44 @@ def main():
     parser = argparse.ArgumentParser(description=
                                      "Maintain data consistency of a "
                                      "directory file structure")
-    parser.add_argument('-l', '--loglevel', dest='loglevel',
+    parser.add_argument("-l", "--loglevel", dest="loglevel",
                         default=logging.getLevelName(logging.INFO),
                         metavar='LEVEL',
-                        help='on of CRITICAL, ERROR, WARNING, INFO, DEBUG')
-    subparsers = parser.add_subparsers(title='available commands',
+                        help="one of CRITICAL, ERROR, WARNING, INFO, DEBUG "
+                            "(default: '%(default)s')")
+    subparsers = parser.add_subparsers(title="available commands",
                                       help="Run 'COMMAND -h' for more specific help")
 
     parser_create = subparsers.add_parser("create")
     parser_create.description = "Create database from checksum files "+\
                                 "by recursive directory search."
     parser_create.set_defaults(func=create)
-    parser_create.add_argument('-d', '--dir', dest='directory', 
+    parser_create.add_argument("-d", "--dir", dest="directory",
                                default=os.getcwdu(),
-                               metavar='DIR',
-                               help='working directory, current otherwise')
-    parser_create.add_argument('-p', '--pattern', dest='pattern',
+                               metavar="DIR",
+                               help="working directory (default: '%(default)s')")
+    parser_create.add_argument("-p", "--pattern", dest="pattern",
                                default=r".*\.sha|.*\.md5",
-                               metavar='REGEX', 
-                               help='regular expression pattern of checksum files')
-    parser_create.add_argument('-o', '--outfile', dest='outfile',
+                               metavar="REGEX",
+                               help="regular expression pattern of checksum files "
+                                    "(default: '%(default)s')")
+    parser_create.add_argument("-o", "--outfile", dest="outfile",
                                default=u"checksum.db",
                                type=argparse.FileType('w'),
-                               metavar='OUTFILE',
-                               help='output filename for checksum database')
+                               metavar="OUTFILE",
+                               help="output filename for checksum database "
+                                    "(default: '%(default)s')")
 
     parser_verify = subparsers.add_parser("verify")
     parser_verify.description = "Verify a directory structure based on an "+\
             "existing checksum database and sync with changes"
     parser_verify.set_defaults(func=verify)
-    parser_verify.add_argument('-i', '--infile', dest='infile',
+    parser_verify.add_argument("-i", "--infile", dest="infile",
                                default=u"checksum.db",
                                type=argparse.FileType('rw'),
-                               metavar='INFILE',
-                               help='filename for checksum database to update')
+                               metavar="INFILE",
+                               help="filename for checksum database to update "
+                                    "(default: '%(default)s')")
 
     if len(sys.argv) <= 1:
         parser.print_help()
