@@ -114,6 +114,11 @@ class ChecksumDB(object):
     _count = None
 
     def __init__(s, directory, pattern):
+        directory = os.path.abspath(directory)
+        if not os.path.isdir(directory):
+            raise MyError(u"Provided directory '{0}' does not exist!"
+                         .format(directory))
+
         s.dirname = directory
         s.watchlist = dict()
         s.excludes = set()
@@ -189,10 +194,16 @@ class ChecksumDB(object):
         print len(deleted)
 
     def store(s, outfile):
+        outfile = os.path.abspath(outfile)
+        dirname = os.path.dirname(outfile)
+        if not os.path.isdir(dirname):
+            raise MyError(u"Directory for database file '{0}' does not exist!"
+                         .format(dirname))
         s._count = len(s.watchlist)
         if s.empty():
             raise MyError("Checksum DB is empty, nothing to save.")
-        pickle.dump(s, outfile)
+        with open(outfile, 'w') as fd:
+            pickle.dump(s, fd)
         logging.info("Saved {0} entries.".format(len(s.watchlist)))
 
     def isValid(s):
@@ -201,12 +212,16 @@ class ChecksumDB(object):
         return False
 
     @staticmethod
-    def load(infile):
-        db = pickle.load(infile)
+    def load(filename):
+        filename = os.path.abspath(filename)
+        if not os.path.isfile(filename):
+            raise MyError(u"Database file '{0}' does not exist!"
+                         .format(filename))
+        with open(filename, 'r') as fd:
+            db = pickle.load(fd)
         if not db.isValid():
             raise MyError("Loading DB file '{0}' failed!".format(infile.name))
-        absname = os.path.abspath(infile.name)
-        relname = os.path.relpath(absname, db.dirname)
+        relname = os.path.relpath(filename, db.dirname)
         if not relname.startswith(u'..'):
             # infile is part of monitored directory tree
             db.exclude(relname)
@@ -252,14 +267,10 @@ class ChecksumDB(object):
 
 def verify(args):
     print "verify"
-    if not hasattr(args, 'infile'):
-#       not hasattr(args, 'outfile') or \
-#       not hasattr(args, 'pattern'):
+    if not hasattr(args, 'filename'):
         return
 
-    db = ChecksumDB.load(args.infile)
-#    for k,v in db.watchlist.items():
-#        print k,v
+    db = ChecksumDB.load(args.filename)
     print "Loaded checksums for {0}.".format(db)
     db.check()
 
@@ -267,21 +278,20 @@ def verify(args):
 # TODO: process checksum files in parallel
 def create(args):
     if not hasattr(args, 'directory') or \
-       not hasattr(args, 'outfile') or \
+       not hasattr(args, 'filename') or \
        not hasattr(args, 'pattern'):
         return
 
-    directory, pattern, outfile = args.directory, args.pattern, args.outfile
-
+    directory, pattern, filename = args.directory, args.pattern, args.filename
     msg = "Creating DB from files in '{0}' with pattern '{1}'. Saving to '{2}'.".\
-        format(directory, pattern.pattern, outfile.name)
+        format(directory, pattern.pattern, filename)
     print msg, "continue ? [Yn]"
     answer = sys.stdin.readline()
     if len(answer) > 1:
         return 1
 
     db = ChecksumDB(directory, pattern)
-    db.store(outfile)
+    db.store(filename)
 
 def logFormatter():
     fmtr = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s',
@@ -319,10 +329,9 @@ def main():
                                metavar="REGEX",
                                help="regular expression pattern of checksum files "
                                     "(default: '%(default)s')")
-    parser_create.add_argument("-o", "--outfile", dest="outfile",
+    parser_create.add_argument("-f", "--filename", dest="filename",
                                default=u"checksum.db",
-                               type=argparse.FileType('w'),
-                               metavar="OUTFILE",
+                               metavar="FILENAME",
                                help="output filename for checksum database "
                                     "(default: '%(default)s')")
 
@@ -330,10 +339,9 @@ def main():
     parser_verify.description = "Verify a directory structure based on an "+\
             "existing checksum database and sync with changes"
     parser_verify.set_defaults(func=verify)
-    parser_verify.add_argument("-i", "--infile", dest="infile",
+    parser_verify.add_argument("-f", "--filename", dest="filename",
                                default=u"checksum.db",
-                               type=argparse.FileType('rw'),
-                               metavar="INFILE",
+                               metavar="FILENAME",
                                help="filename for checksum database to update "
                                     "(default: '%(default)s')")
 
@@ -361,4 +369,5 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
 # vim: set ts=8 sw=4 tw=0: 
