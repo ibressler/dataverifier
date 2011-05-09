@@ -91,6 +91,8 @@ class ChecksumFile(object):
 class ChecksumDB(object):
     dirname = None
     watchlist = None
+    # for store/load consistency tests
+    _count = None
 
     def __init__(s, directory, pattern):
         s.dirname = directory
@@ -111,14 +113,22 @@ class ChecksumDB(object):
                     i += 1
 
     def store(s, outfile):
+        s._count = len(s.watchlist)
         if s.empty():
             raise MyError("Checksum DB is empty, nothing to save.")
         pickle.dump(s, outfile)
         logging.info("Saved {0} entries.".format(len(s.watchlist)))
 
+    def isValid(s):
+        if s._count == len(s.watchlist):
+            return True
+        return False
+
     @staticmethod
     def load(infile):
         db = pickle.load(infile)
+        if not db.isValid():
+            raise MyError("Loading DB file '{0}' failed!".format(infile.name))
         return db
 
     def empty(s):
