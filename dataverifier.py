@@ -109,12 +109,14 @@ class ChecksumFile(object):
 class ChecksumDB(object):
     dirname = None
     watchlist = None
+    excludes = None # which files not to monitor
     # for store/load consistency tests
     _count = None
 
     def __init__(s, directory, pattern):
         s.dirname = directory
         s.watchlist = dict()
+        s.excludes = set()
 
         for (path, dirnames, filenames) in s.treeFull():
             # add all checksum files within the current directory
@@ -125,6 +127,9 @@ class ChecksumDB(object):
                 fullname = os.path.join(path,fn)
                 checksumFile = ChecksumFile(fullname)
                 s.addFromFile(checksumFile)
+
+    def exclude(s, pattern):
+        s.excludes.add(pattern)
 
     def treeFull(s):
         if not os.path.exists(s.dirname):
@@ -142,9 +147,8 @@ class ChecksumDB(object):
         # traverse the filesystem and lookup each visited file in the DB
         # faster on disk (?) than random picking of files
         logging.info(u"Starting check ..")
-        newFiles = []
         visited = set()
-        checksumTypes = dict()
+        checksumTypes = { cfv.SHA1: cfv.SHA1() } # default type for creating
         cfv.chdir(s.dirname)
         for filename in s.treeFiles():
             filename = os.path.relpath(filename, s.dirname)
@@ -166,12 +170,19 @@ class ChecksumDB(object):
                 # calc checksum and compare 
                 retval = checksumType.test_file(filename, binascii.a2b_hex(oldChecksum))
                 if retval is not None: # crc mismatch
-                    logging.info(u"Checksum for '{0}' did not match.".format(filename))
+                    logging.warning(u"Checksum for '{0}' did not match.".format(filename))
+                else:
+                    logging.info(u"OK: '{0}'".format(filename))
 
-            if filename not in s.watchlist:
-                newFiles.append(filename)
+            elif filename not in s.excludes: # not in s.watchlist
+                newType = cfv.SHA1
+                checksumType = checksumTypes[newType]
+                (newChecksum, filesize), dat = checksumType.make_addfile(filename)
+                s.watchlist[filename] = (newChecksum, time.time(), newType)
+                logging.info(u"NEW: '{0}' '{1}'".format(filename, s.watchlist[filename][0]))
 
         deleted = s.watchlist.viewkeys() - visited
+        logging.info(u"{0} files do not exist".format(len(deleted)))
 
         logging.info(u"done.")
         print deleted
@@ -194,6 +205,11 @@ class ChecksumDB(object):
         db = pickle.load(infile)
         if not db.isValid():
             raise MyError("Loading DB file '{0}' failed!".format(infile.name))
+        absname = os.path.abspath(infile.name)
+        relname = os.path.relpath(absname, db.dirname)
+        if not relname.startswith(u'..'):
+            # infile is part of monitored directory tree
+            db.exclude(relname)
         return db
 
     def empty(s):
@@ -282,6 +298,10 @@ def main():
     parser = argparse.ArgumentParser(description=
                                      "Maintain data consistency of a "
                                      "directory file structure")
+    parser.add_argument('-l', '--loglevel', dest='loglevel',
+                        default=logging.getLevelName(logging.INFO),
+                        metavar='LEVEL',
+                        help='on of CRITICAL, ERROR, WARNING, INFO, DEBUG')
     subparsers = parser.add_subparsers(title='available commands',
                                       help="Run 'COMMAND -h' for more specific help")
 
@@ -294,7 +314,7 @@ def main():
                                metavar='DIR',
                                help='working directory, current otherwise')
     parser_create.add_argument('-p', '--pattern', dest='pattern',
-                               default=u".*\\.sha|.*\\.md5",
+                               default=r".*\.sha|.*\.md5",
                                metavar='REGEX', 
                                help='regular expression pattern of checksum files')
     parser_create.add_argument('-o', '--outfile', dest='outfile',
@@ -318,6 +338,10 @@ def main():
         return 1
 
     args = parser.parse_args()
+    # set log level
+    if hasattr(args, 'loglevel') and hasattr(logging, args.loglevel):
+        logging.getLogger().setLevel(getattr(logging, args.loglevel))
+
     # check for a valid regex
     if hasattr(args, 'pattern'):
         try:
