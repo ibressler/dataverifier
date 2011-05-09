@@ -115,19 +115,63 @@ class ChecksumDB(object):
         s.dirname = directory
         s.watchlist = dict()
 
-        generator = os.walk(directory, followlinks=True)
-        i = 0
-        for (dirpath, dirnames, filenames) in generator:
-            # add all files within the current directory
-            for fname in filenames:
-                match = re.search(pattern, fname)
-                if match is not None:
-                    # why does it work with decode?
-                    fullname = os.path.join(dirpath,fname)
-                    checksumFile = ChecksumFile(fullname)
-                    s.update(checksumFile)
-#                    if i == 22: return
-                    i += 1
+        for (path, dirnames, filenames) in s.treeFull():
+            # add all checksum files within the current directory
+            for fn in filenames:
+                match = re.search(pattern, fn)
+                if match is None:
+                    continue
+                fullname = os.path.join(path,fn)
+                checksumFile = ChecksumFile(fullname)
+                s.addFromFile(checksumFile)
+
+    def treeFull(s):
+        if not os.path.exists(s.dirname):
+            return []
+        gen = os.walk(s.dirname, followlinks=True)
+        return gen
+
+    def treeFiles(s):
+        for (path, dirnames, filenames) in s.treeFull():
+            for fn in filenames:
+                fullname = os.path.join(path,fn)
+                yield fullname
+
+    def check(s):
+        # traverse the filesystem and lookup each visited file in the DB
+        # faster on disk (?) than random picking of files
+        logging.info(u"Starting check ..")
+        newFiles = []
+        visited = set()
+        checksumTypes = dict()
+        for filename in s.treeFiles():
+            logging.debug(filename)
+            visited.add(filename)
+
+            if filename in s.watchlist:
+                logging.debug(u"found")
+                oldChecksum, oldTime, oldType = s.watchlist[filename]
+
+                # get checksum algorithm instance from cfv
+                checksumType = None
+                if oldType in checksumTypes:
+                    checksumType = checksumTypes[oldType]
+                else:
+                    checksumType = oldType()
+                    checksumTypes[oldType] = checksumType
+
+                # calc checksum and compare 
+                retval = checksumType.test_file(filename, oldChecksum)
+                logging.debug(retval)
+
+            if filename not in s.watchlist:
+                newFiles.append(filename)
+
+        deleted = s.watchlist.viewkeys() - visited
+
+        logging.info(u"done.")
+        print deleted
+        print len(deleted)
 
     def store(s, outfile):
         s._count = len(s.watchlist)
@@ -154,15 +198,16 @@ class ChecksumDB(object):
     def __str__(s):
         return u"{0} ({1})".format(s.dirname, len(s.watchlist))
 
-    def update(s, checksumFile):
+    def addFromFile(s, checksumFile):
         if checksumFile is None or checksumFile.empty():
             return
         logging.info(u"Adding checksums from file '{0}' .."
                      .format(checksumFile.filename))
         newTime = checksumFile.timestamp
+        newType = checksumFile.type
         for filename, newChecksum in checksumFile.filelist:
-            if s.watchlist.has_key(filename):  # resolve conflicts
-                oldChecksum, oldTime, type = s.watchlist[filename]
+            if filename not in s.watchlist:  # resolve conflicts
+                oldChecksum, oldTime, oldType = s.watchlist[filename]
 #                logging.info(type)
                 # TODO: convert checksums to integer for comparison?
                 if oldChecksum == newChecksum: # ignore identical checksums
@@ -177,7 +222,7 @@ class ChecksumDB(object):
                                          oldChecksum, formattime(oldTime)))
                     continue
 
-            s.watchlist[filename] = (newChecksum, newTime, checksumFile.type)
+            s.watchlist[filename] = (newChecksum, newTime, newType)
         logging.info("done.")
 
 ## commands ##
@@ -190,9 +235,10 @@ def verify(args):
         return
 
     db = ChecksumDB.load(args.infile)
-    for k,v in db.watchlist.items():
-        print k,v
+#    for k,v in db.watchlist.items():
+#        print k,v
     print "Loaded checksums for {0}.".format(db)
+    db.check()
 
 # parses existing checksum files and generates a database from them
 # TODO: process checksum files in parallel
