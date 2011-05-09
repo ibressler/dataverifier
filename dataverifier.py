@@ -32,6 +32,7 @@ import time
 import logging
 
 import cfv
+import binascii
 
 # enable utf8 encoding when piped
 sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout);
@@ -144,7 +145,9 @@ class ChecksumDB(object):
         newFiles = []
         visited = set()
         checksumTypes = dict()
+        cfv.chdir(s.dirname)
         for filename in s.treeFiles():
+            filename = os.path.relpath(filename, s.dirname)
             logging.debug(filename)
             visited.add(filename)
 
@@ -161,8 +164,9 @@ class ChecksumDB(object):
                     checksumTypes[oldType] = checksumType
 
                 # calc checksum and compare 
-                retval = checksumType.test_file(filename, oldChecksum)
-                logging.debug(retval)
+                retval = checksumType.test_file(filename, binascii.a2b_hex(oldChecksum))
+                if retval is not None: # crc mismatch
+                    logging.info(u"Checksum for '{0}' did not match.".format(filename))
 
             if filename not in s.watchlist:
                 newFiles.append(filename)
@@ -206,7 +210,10 @@ class ChecksumDB(object):
         newTime = checksumFile.timestamp
         newType = checksumFile.type
         for filename, newChecksum in checksumFile.filelist:
-            if filename not in s.watchlist:  # resolve conflicts
+            # getting absolute filenames here, making them local to DB.dirname
+            filename = os.path.relpath(filename, s.dirname)
+            logging.debug(filename)
+            if filename in s.watchlist:  # resolve conflicts
                 oldChecksum, oldTime, oldType = s.watchlist[filename]
 #                logging.info(type)
                 # TODO: convert checksums to integer for comparison?
