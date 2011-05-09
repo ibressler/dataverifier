@@ -1,6 +1,6 @@
 ## Purpose
 
-Maintain data integrity for a directory structure recursively and
+Maintain long term data integrity for a directory structure recursively and
 automatically: detect new files, deleted files, warn about changed/modified
 files, update checksums accordingly
 
@@ -17,5 +17,22 @@ detect errorneous hardware early
 
 ## Requirements
 
-- *cfv*
-  get it from http://cfv.sourceforge.net/
+- *cfv*, get it from http://cfv.sourceforge.net/
+
+## Usage
+
+This is experimental! Use at your own risk!
+
+    $ python2.7 dataverifier.py --help
+
+create database file
+
+    $ python2.7 dataverifier.py create
+
+verify files from a database
+
+    $ python2.7 dataverifier.py verify
+
+## License
+
+[GPL](http://www.gnu.org/licenses/gpl.html)
