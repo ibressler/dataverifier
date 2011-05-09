@@ -21,7 +21,9 @@ detect errorneous hardware early
 
 ## Usage
 
-This is experimental! Use at your own risk!
+This is work in progress!
+This is experimental!
+Use at your own risk!
 
     $ python2.7 dataverifier.py --help
 
