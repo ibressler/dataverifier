@@ -6,14 +6,24 @@ import sys
 import getopt
 import argparse
 import os.path
-
-import os, os.path, re
+import os
+import re
 import codecs
 import pickle
+import StringIO
+import time
+import logging
+
+import cfv
 
 # enable utf8 encoding when piped
 sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout);
 #sys.setdefaultencoding('utf8')
+
+def formattime(timestamp):
+    if timestamp is None:
+        return None
+    return unicode(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)))
 
 class MyError(Exception):
     def __init__(s, msg=""):
@@ -24,23 +34,126 @@ class MyError(Exception):
 
 class Usage(MyError): pass
 
-class ChecksumDB():
+class ChecksumFile(object):
+    filename = None
+    filelist = None
+    timestamp = None
+    type = None
+
+    def __init__(s, filename):
+        if filename is None or not os.path.exists(filename):
+            raise MyError("Given checksum file '{0}' does "
+                          "not exist!".format(filename))
+        statdata = os.stat(filename)
+        s.timestamp = statdata.st_mtime
+        s.filelist = s._getChecksums(filename)
+        s.filename = filename
+
+    # parses the checksum files *.md5 or *.sha
+    def _getChecksums(s, fname):
+        dname = os.path.dirname(fname)
+        lst = []
+        with codecs.open(fname, encoding='utf8') as fd:
+            s.type = cfv.auto_chksumfile_match(cfv.PeekFile(fd))
+            for line in fd:
+                try:
+                    if len(line) < 2 or line.startswith(u'#'):
+                        continue
+                    fields = line.split()
+                    if len(fields) < 2:
+                        continue
+                    checksum = fields[0].strip()
+                    if len(checksum) < 2:
+                        continue
+                    filename = line[len(checksum):].strip().lstrip(u'*')
+                    filename = os.path.join(dname, filename)
+                except Exception, e:
+                    logging.error(str(e)+'\n'+line)
+                    raise
+                else:
+                    lst.append((filename, checksum))
+        return lst
+
+    def empty(s):
+        if s.timestamp is None or s.timestamp <= 0 or \
+           s.filelist is None or len(s.filelist) <= 0 or \
+           s.filename is None or len(s.filename) <= 0:
+            return True
+        return False
+
+    def __str__(s):
+        output = StringIO.StringIO()
+        for fn,chk in s.filelist:
+            print >>output, chk +u' *'+ fn
+        print >>output, unicode(s.timestamp), formattime(s.timestamp)
+        return output.getvalue()
+
+class ChecksumDB(object):
     dirname = None
     watchlist = None
 
-    def __init__(s, path):
-        s.dirname = path
+    def __init__(s, directory, pattern):
+        s.dirname = directory
         s.watchlist = dict()
+
+        generator = os.walk(directory, followlinks=True)
+        i = 0
+        for (dirpath, dirnames, filenames) in generator:
+            # add all files within the current directory
+            for fname in filenames:
+                match = re.search(pattern, fname)
+                if match is not None:
+                    # why does it work with decode?
+                    fullname = os.path.join(dirpath,fname)
+                    checksumFile = ChecksumFile(fullname)
+                    s.update(checksumFile)
+#                    if i == 22: return
+                    i += 1
+
+    def store(s, outfile):
+        if s.empty():
+            raise MyError("Checksum DB is empty, nothing to save.")
+        pickle.dump(s, outfile)
+        logging.info("Saved {0} entries.".format(len(s.watchlist)))
+
+    @staticmethod
+    def load(infile):
+        db = pickle.load(infile)
+        return db
 
     def empty(s):
         return len(s.watchlist) <= 0
 
     def __str__(s):
-        return "{0} ({1})".format(s.dirname, len(s.watchlist))
+        return u"{0} ({1})".format(s.dirname, len(s.watchlist))
 
-def debugPrint(arg):
-    s = str(arg[:])
-    print s.decode('ascii', 'replace')    
+    def update(s, checksumFile):
+        if checksumFile is None or checksumFile.empty():
+            return
+        logging.info(u"Adding checksums from file '{0}' .."
+                     .format(checksumFile.filename))
+        newTime = checksumFile.timestamp
+        for filename, newChecksum in checksumFile.filelist:
+            if s.watchlist.has_key(filename):  # resolve conflicts
+                oldChecksum, oldTime, type = s.watchlist[filename]
+#                logging.info(type)
+                # TODO: convert checksums to integer for comparison?
+                if oldChecksum == newChecksum: # ignore identical checksums
+                    continue
+                if oldTime >= newTime:
+                    # don't replace a recent checksum with an old one
+                    logging.warning(u"Skipping '{0}': "
+                                 u"outdated checksum {1} ({2}) "
+                                 u"vs. {3} ({4}) from DB)"\
+                                 .format(filename, 
+                                         newChecksum, formattime(newTime), 
+                                         oldChecksum, formattime(oldTime)))
+                    continue
+
+            s.watchlist[filename] = (newChecksum, newTime, checksumFile.type)
+        logging.info("done.")
+
+## commands ##
 
 def verify(args):
     print "verify"
@@ -49,49 +162,13 @@ def verify(args):
 #       not hasattr(args, 'pattern'):
         return
 
-    db = pickle.load(args.infile)
+    db = ChecksumDB.load(args.infile)
+    for k,v in db.watchlist.items():
+        print k,v
     print "Loaded checksums for {0}.".format(db)
 
-def getChecksums(fname):
-    if fname is None or not os.path.exists(fname):
-        return
-    dname = os.path.dirname(fname)
-    lst = []
-    with codecs.open(fname, encoding='utf8') as fd:
-        for line in fd:
-            try:
-                if len(line) < 2 or line.startswith(u'#'):
-                    continue
-                fields = line.split()
-                if len(fields) < 2:
-                    continue
-                checksum = fields[0].strip()
-                if len(checksum) < 2:
-                    continue
-                filename = line[len(checksum):].strip().lstrip(u'*')
-                filename = os.path.join(dname, filename)
-            except Exception, e:
-                print e
-                print line
-                raise
-            else:
-                lst.append((filename, checksum))
-    return lst
-
-def updateWatchlist(watchlist, newList):
-    for filename, checksum in newList:
-        if watchlist.has_key(filename):
-            oldChecksum = watchlist[filename]
-            # prefer longer (sha) checksums and ignore duplicates
-            if len(oldChecksum) > len(checksum):
-                continue
-            elif len(oldChecksum) == len(checksum) and \
-                    oldChecksum != checksum:
-                print filename, watchlist[filename], checksum
-                continue
-
-        watchlist[filename] = checksum
-
+# parses existing checksum files and generates a database from them
+# TODO: process checksum files in parallel
 def create(args):
     if not hasattr(args, 'directory') or \
        not hasattr(args, 'outfile') or \
@@ -107,35 +184,21 @@ def create(args):
     if len(answer) > 1:
         return 1
 
-    db = ChecksumDB(directory)
-    generator = os.walk(directory, followlinks=True)
-    for (dirpath, dirnames, filenames) in generator:
-        # add all files within the current directory
-        for fname in filenames:
-            match = re.search(pattern, fname)
-            if match is not None:
-                # why does it work with decode?
-                fullname = os.path.join(dirpath,fname).decode('utf8')
-                print fullname
-                lst = getChecksums(fullname)
-                updateWatchlist(db.watchlist, lst)
+    db = ChecksumDB(directory, pattern)
+    db.store(outfile)
 
-    if db.empty():
-        raise MyError("Checksum list is empty, nothing to save.")
-    pickle.dump(db, outfile)
-    print "Saved {0} entries.".format(len(db.watchlist))
-
-    return
-
-    countMissing = 0
-    for filename, checksum in watchlist.items():
-        if not os.path.exists(filename):
-            countMissing += 1
-            print filename
-
-    print countMissing, 'missing files', len(watchlist), 'overall'
+def logFormatter():
+    fmtr = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s',
+                             datefmt='%Y-%m-%d %H:%M:%S')
+    return fmtr
 
 def main():
+    # configure console logging
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logFormatter())
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.NOTSET)
+
     parser = argparse.ArgumentParser(description=
                                      "Maintain data consistency of a "
                                      "directory file structure")
@@ -190,3 +253,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+# vim: set ts=8 sw=4 tw=0: 
