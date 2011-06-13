@@ -110,6 +110,7 @@ class ChecksumDB(object):
     dirname = None
     watchlist = None
     excludes = None # which files not to monitor
+    checkInterval = float(3600*24 * 14)
     # for store/load consistency tests
     _count = None
 
@@ -148,12 +149,30 @@ class ChecksumDB(object):
                 fullname = os.path.join(path,fn)
                 yield fullname
 
+    # filename: file to add checksum for
+    # type: cfv checksum type (e.g. cfv.SHA1())
+    def _updateEntry(s, filename, type):
+        if filename is None or type is None:
+            return
+        if not hasattr(s, 'checksumTypes') or not hasattr(s, 'currentTime'):
+            return
+        checksumType = s.checksumTypes[type]
+        if checksumType is None:
+            return
+        (newChecksum, filesize), dat = checksumType.make_addfile(filename)
+        s.watchlist[filename] = (newChecksum, s.currentTime, type)
+        logging.info(u"NEW: '{0}' '{1}'".format(filename, s.watchlist[filename][0]))
+        s.newFiles.append((newChecksum, filename))
+
     def check(s):
         # traverse the filesystem and lookup each visited file in the DB
         # faster on disk (?) than random picking of files
         logging.info(u"Starting check ..")
         visited = set()
-        checksumTypes = { cfv.SHA1: cfv.SHA1() } # default type for creating
+        s.currentTime = time.time()
+        s.checksumTypes = { cfv.SHA1: cfv.SHA1() } # default type for creating
+        s.newFiles = []
+        s.mismatchFiles = []
         cfv.chdir(s.dirname)
         for filename in s.treeFiles():
             filename = os.path.relpath(filename, s.dirname)
@@ -164,34 +183,42 @@ class ChecksumDB(object):
                 logging.debug(u"found")
                 oldChecksum, oldTime, oldType = s.watchlist[filename]
 
+                # ignore if recently tested
+                if oldTime+s.checkInterval > s.currentTime:
+                    #continue
+                    pass
+
                 # get checksum algorithm instance from cfv
                 checksumType = None
-                if oldType in checksumTypes:
-                    checksumType = checksumTypes[oldType]
+                if oldType in s.checksumTypes:
+                    checksumType = s.checksumTypes[oldType]
                 else:
                     checksumType = oldType()
-                    checksumTypes[oldType] = checksumType
+                    s.checksumTypes[oldType] = checksumType
 
                 # calc checksum and compare 
                 retval = checksumType.test_file(filename, binascii.a2b_hex(oldChecksum))
                 if retval is not None: # crc mismatch
                     logging.warning(u"Checksum for '{0}' did not match.".format(filename))
+                    s.mismatchFiles.append((oldChecksum, filename))
+                    s._updateEntry(filename, cfv.SHA1)
                 else:
-                    logging.info(u"OK: '{0}'".format(filename))
+                    #logging.info(u"OK: '{0}'".format(filename))
+                    pass
 
             elif filename not in s.excludes: # not in s.watchlist
-                newType = cfv.SHA1
-                checksumType = checksumTypes[newType]
-                (newChecksum, filesize), dat = checksumType.make_addfile(filename)
-                s.watchlist[filename] = (newChecksum, time.time(), newType)
-                logging.info(u"NEW: '{0}' '{1}'".format(filename, s.watchlist[filename][0]))
+                s._updateEntry(filename, cfv.SHA1)
 
         deleted = s.watchlist.viewkeys() - visited
         logging.info(u"{0} files do not exist".format(len(deleted)))
 
         logging.info(u"done.")
-        print deleted
-        print len(deleted)
+        for checksum, filename in s.newFiles:
+            logging.info(u"NEW: '{0}' '{1}'".format(checksum, filename))
+        for checksum, filename in s.mismatchFiles:
+            logging.warning(u"MISMATCH: '{0}' '{1}'".format(checksum, filename))
+        for filename in deleted:
+            logging.info(u"DELETED: '{0}'".format(filename))
 
     def store(s, outfile):
         outfile = os.path.abspath(outfile)
