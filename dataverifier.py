@@ -43,6 +43,10 @@ def formattime(timestamp):
         return None
     return unicode(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)))
 
+# TODO
+def uniqueTemporaryFilename():
+    return "unittestfilename"
+
 class MyError(Exception):
     def __init__(s, msg=""):
         Exception.__init__(s)
@@ -51,28 +55,76 @@ class MyError(Exception):
         return str(s.msg)
 
 class Usage(MyError): pass
+class FileNotFound(MyError): pass
 
 class ChecksumFile(object):
-    filename = None
-    filelist = None
-    timestamp = None
-    type = None
+    """
+    
+    Test blank checksum file.
+    >>> try: cf = ChecksumFile(None)
+    ... except Exception, e: e.__class__.__name__
+    'FileNotFound'
 
-    def __init__(s, filename):
-        if filename is None or not os.path.exists(filename):
-            raise MyError("Given checksum file '{0}' does "
-                          "not exist!".format(filename))
+    Prepare checksum file for testing.
+    >>> import time
+    >>> filename = uniqueTemporaryFilename()
+    >>> testdata = ("40c6f45b5673a3cc023eb175ea9e8c4e496c3217  bla.txt\\na6348cdee4b941e888d9a92c3cd67f4fa46e7156 *blub.bin\\n")
+    >>> timestamp = time.time()
+    >>> with open(filename, 'w') as fd:
+    ...     fd.write(testdata)
+
+    Test previously created checksum file.
+    >>> cf = ChecksumFile(filename)
+    >>> cf.filename == filename
+    True
+    >>> abs(cf.timestamp - timestamp) < 2.0 # max 2 sec diff., OS dependent
+    True
+    >>> cf.checksumType.__name__
+    'SHA1'
+    >>> cf.filelist
+    [(u'bla.txt', u'40c6f45b5673a3cc023eb175ea9e8c4e496c3217'), (u'blub.bin', u'a6348cdee4b941e888d9a92c3cd67f4fa46e7156')]
+
+    Remove checksum file from testing.
+    >>> if os.path.isfile(filename):
+    ...     os.remove(filename)
+    """
+    _filename = None
+    _filelist = None
+    _timestamp = None
+    _type = None
+
+    @property
+    def filename(self):
+        return self._filename
+
+    @property
+    def filelist(self):
+        return self._filelist
+
+    @property
+    def timestamp(self):
+        return self._timestamp
+
+    @property
+    def checksumType(self):
+        return self._type
+
+    def __init__(self, filename):
+        if filename is None or not os.path.isfile(filename):
+            raise FileNotFound("Given checksum file '{0}' does "
+                               "not exist!".format(filename))
         statdata = os.stat(filename)
-        s.timestamp = statdata.st_mtime
-        s.filelist = s._getChecksums(filename)
-        s.filename = filename
+        self._timestamp = statdata.st_mtime
+        self._filelist = self._getChecksums(filename)
+        self._filename = filename
 
     # parses the checksum files *.md5 or *.sha
-    def _getChecksums(s, fname):
+    def _getChecksums(self, fname):
         dname = os.path.dirname(fname)
         lst = []
         with codecs.open(fname, encoding='utf8') as fd:
-            s.type = cfv.auto_chksumfile_match(cfv.PeekFile(fd))
+            self._type = cfv.auto_chksumfile_match(cfv.PeekFile(fd))
+            fd.seek(offset = 0, whence = 0) # rewind
             for line in fd:
                 try:
                     if len(line) < 2 or line.startswith(u'#'):
@@ -92,60 +144,60 @@ class ChecksumFile(object):
                     lst.append((filename, checksum))
         return lst
 
-    def empty(s):
-        if s.timestamp is None or s.timestamp <= 0 or \
-           s.filelist is None or len(s.filelist) <= 0 or \
-           s.filename is None or len(s.filename) <= 0:
-            return True
-        return False
-
-    def __str__(s):
+    def __str__(self):
         output = StringIO.StringIO()
-        for fn,chk in s.filelist:
+        for fn,chk in self._filelist:
             print >>output, chk +u' *'+ fn
-        print >>output, unicode(s.timestamp), formattime(s.timestamp)
+        print >>output, unicode(self._timestamp), formattime(self._timestamp)
         return output.getvalue()
 
 class ChecksumDB(object):
-    dirname = None
-    watchlist = None
-    excludes = None # which files not to monitor
-    checkInterval = float(3600*24 * 14)
+    """
+    >>> print "bla"
+    """
+    _directory = None
+    _watchlist = None
+    _excludes = None # which files not to monitor
+    _checkInterval = float(3600*24 * 14)
     # for store/load consistency tests
     _count = None
 
-    def __init__(s, directory, pattern):
+    @property
+    def directory(self):
+        return self._directory
+
+    def __init__(self, directory, pattern):
         directory = os.path.abspath(directory)
         if not os.path.isdir(directory):
             raise MyError(u"Provided directory '{0}' does not exist!"
                          .format(directory))
 
-        s.dirname = directory
-        s.watchlist = dict()
-        s.excludes = set()
+        self._directory = directory
+        self._watchlist = dict()
+        self._excludes = set()
 
-        for (path, dirnames, filenames) in s.treeFull():
-            # add all checksum files within the current directory
+        # add all checksum files within the current directory
+        for fn in self.treeFiles(pattern):
+            match = pattern.search(fn)
+            if match is None:
+                continue
+            fullname = os.path.join(path,fn)
+            checksumFile = ChecksumFile(fullname)
+            self.addFromFile(checksumFile)
+
+    def exclude(self, pattern):
+        self.excludes.add(pattern)
+
+    def treeFiles(self, pattern = None):
+        if not os.path.isdir(self.directory):
+            return
+        if pattern is not None:
+            pattern = re.compile(pattern)
+        for (path, dirnames, filenames) in os.walk(self.directory,
+                                                   followlinks=True):
             for fn in filenames:
-                match = re.search(pattern, fn)
-                if match is None:
+                if pattern is not None and pattern.search(fn) is None:
                     continue
-                fullname = os.path.join(path,fn)
-                checksumFile = ChecksumFile(fullname)
-                s.addFromFile(checksumFile)
-
-    def exclude(s, pattern):
-        s.excludes.add(pattern)
-
-    def treeFull(s):
-        if not os.path.exists(s.dirname):
-            return []
-        gen = os.walk(s.dirname, followlinks=True)
-        return gen
-
-    def treeFiles(s):
-        for (path, dirnames, filenames) in s.treeFull():
-            for fn in filenames:
                 fullname = os.path.join(path,fn)
                 yield fullname
 
@@ -261,12 +313,12 @@ class ChecksumDB(object):
         return u"{0} ({1})".format(s.dirname, len(s.watchlist))
 
     def addFromFile(s, checksumFile):
-        if checksumFile is None or checksumFile.empty():
+        if checksumFile is None:
             return
         logging.info(u"Adding checksums from file '{0}' .."
                      .format(checksumFile.filename))
         newTime = checksumFile.timestamp
-        newType = checksumFile.type
+        newType = checksumFile.checksumType
         for filename, newChecksum in checksumFile.filelist:
             # getting absolute filenames here, making them local to DB.dirname
             filename = os.path.relpath(filename, s.dirname)
@@ -292,6 +344,10 @@ class ChecksumDB(object):
 
 ## commands ##
 
+def doctest(dummy):
+    import doctest
+    doctest.testmod()
+
 def verify(args):
     print "verify"
     if not hasattr(args, 'filename'):
@@ -305,9 +361,9 @@ def verify(args):
 # parses existing checksum files and generates a database from them
 # TODO: process checksum files in parallel
 def create(args):
-    if not hasattr(args, 'directory') or \
-       not hasattr(args, 'filename') or \
-       not hasattr(args, 'pattern'):
+    if (   not hasattr(args, 'directory')
+        or not hasattr(args, 'filename')
+        or not hasattr(args, 'pattern')):
         return
 
     directory, pattern, filename = args.directory, args.pattern, args.filename
@@ -336,42 +392,49 @@ def main():
     parser = argparse.ArgumentParser(description=
                                      "Maintain data consistency of a "
                                      "directory file structure")
-    parser.add_argument("-l", "--loglevel", dest="loglevel",
-                        default=logging.getLevelName(logging.INFO),
-                        metavar='LEVEL',
-                        help="one of CRITICAL, ERROR, WARNING, INFO, DEBUG "
-                            "(default: '%(default)s')")
-    subparsers = parser.add_subparsers(title="available commands",
-                                      help="Run 'COMMAND -h' for more specific help")
+    parser.add_argument("-l", "--loglevel", dest = "loglevel",
+                        default = logging.getLevelName(logging.INFO),
+                        metavar = 'LEVEL',
+                        help = ("one of CRITICAL, ERROR, WARNING, INFO, DEBUG "
+                                "(default: '%(default)s')"))
+    subparsers = parser.add_subparsers(title = "available commands",
+                                      help = ("Run 'COMMAND -h' for more "
+                                              "specific help"))
 
     parser_create = subparsers.add_parser("create")
-    parser_create.description = "Create database from checksum files "+\
-                                "by recursive directory search."
-    parser_create.set_defaults(func=create)
-    parser_create.add_argument("-d", "--dir", dest="directory",
-                               default=os.getcwdu(),
-                               metavar="DIR",
-                               help="working directory (default: '%(default)s')")
-    parser_create.add_argument("-p", "--pattern", dest="pattern",
-                               default=r".*\.sha|.*\.md5",
-                               metavar="REGEX",
-                               help="regular expression pattern of checksum files "
-                                    "(default: '%(default)s')")
-    parser_create.add_argument("-f", "--filename", dest="filename",
-                               default=u"checksum.db",
-                               metavar="FILENAME",
-                               help="output filename for checksum database "
-                                    "(default: '%(default)s')")
+    parser_create.description = ("Create database from checksum files "
+                                 "by recursive directory search.")
+    parser_create.set_defaults(func = create)
+    parser_create.add_argument("-d", "--dir", dest = "directory",
+                               default = os.getcwdu(),
+                               metavar = "DIR",
+                               help = ("working directory (default: "
+                                       "'%(default)s')"))
+    parser_create.add_argument("-p", "--pattern", dest = "pattern",
+                               default = r".*\.sha|.*\.md5",
+                               metavar = "REGEX",
+                               help = ("regular expression pattern of checksum "
+                                       "files (default: '%(default)s')"))
+    parser_create.add_argument("-f", "--filename", dest = "filename",
+                               default = u"checksum.db",
+                               metavar = "FILENAME",
+                               help = ("output filename for checksum database "
+                                       "(default: '%(default)s')"))
 
     parser_verify = subparsers.add_parser("verify")
-    parser_verify.description = "Verify a directory structure based on an "+\
-            "existing checksum database and sync with changes"
-    parser_verify.set_defaults(func=verify)
-    parser_verify.add_argument("-f", "--filename", dest="filename",
-                               default=u"checksum.db",
-                               metavar="FILENAME",
-                               help="filename for checksum database to update "
-                                    "(default: '%(default)s')")
+    parser_verify.description = ("Verify a directory structure based on an "
+                                 "existing checksum database and sync with "
+                                 "changes")
+    parser_verify.set_defaults(func = verify)
+    parser_verify.add_argument("-f", "--filename", dest = "filename",
+                               default = u"checksum.db",
+                               metavar = "FILENAME",
+                               help = ("filename for checksum database to update "
+                                       "(default: '%(default)s')"))
+
+    parser_create = subparsers.add_parser("unittest")
+    parser_create.description = "Run all unit tests to verify code integrity."
+    parser_create.set_defaults(func=doctest)
 
     if len(sys.argv) <= 1:
         parser.print_help()
