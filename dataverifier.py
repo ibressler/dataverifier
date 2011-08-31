@@ -45,7 +45,7 @@ def formattime(timestamp):
 
 # TODO
 def uniqueTemporaryFilename():
-    return "unittestfilename"
+    return ("unittestfilename"+str(int(time.time())))
 
 class MyError(Exception):
     def __init__(s, msg=""):
@@ -151,9 +151,16 @@ class ChecksumFile(object):
         print >>output, unicode(self._timestamp), formattime(self._timestamp)
         return output.getvalue()
 
+# TODO: create test checksum file skeleton class 
 class ChecksumDB(object):
     """
-    >>> print "bla"
+    >>> import shutil
+    >>> testdir = uniqueTemporaryFilename()+"d"
+    >>> while os.path.isdir(testdir): testdir = uniqueTemporaryFilename()+"d"
+    >>> os.mkdir(testdir)
+    >>> db = ChecksumDB(testdir, ".*\.sha")
+    >>> if os.path.isdir(testdir):
+    ...     shutil.rmtree(testdir)
     """
     _directory = None
     _watchlist = None

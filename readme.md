@@ -12,7 +12,7 @@ detect errorneous hardware early
 
 ## Goal
 
-- at the moment, the commandline backend it being developed
+- at the moment, the commandline backend is being developed
 - easy to use GUI (Qt probably) in the future
 
 ## Requirements
